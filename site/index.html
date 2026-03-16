@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>pylot — Project Context Switcher</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- Nav -->
+  <nav>
+    <div class="nav-inner">
+      <a href="#" class="logo">pylot</a>
+      <div class="nav-links">
+        <a href="#how-it-works">How It Works</a>
+        <a href="#commands">Commands</a>
+        <a href="#config">Config</a>
+        <a href="#install">Install</a>
+        <a href="https://github.com/gedaliahs/pylot" target="_blank" class="gh-link">GitHub</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Hero -->
+  <section class="hero">
+    <div class="hero-badge">Terminal Tool</div>
+    <h1>Stop <span class="gradient-text">losing context</span> when switching projects.</h1>
+    <p class="hero-sub">
+      pylot saves your entire dev environment &mdash; git branch, env vars, running services, ports &mdash;
+      and restores everything in one command.
+    </p>
+    <div class="hero-terminal">
+      <div class="term-bar">
+        <span class="dot red"></span>
+        <span class="dot yellow"></span>
+        <span class="dot green"></span>
+        <span class="term-title">Terminal</span>
+      </div>
+      <div class="term-body">
+        <div class="term-line"><span class="prompt">$</span> <span class="cmd">pylot save api-backend</span></div>
+        <div class="term-line dim">  <span class="check">&check;</span> Context 'api-backend' saved</div>
+        <div class="term-line dim">&nbsp;</div>
+        <div class="term-line dim">  &bull; path&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;~/Projects/api-backend</div>
+        <div class="term-line dim">  &bull; branch&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="purple">feat/auth</span></div>
+        <div class="term-line dim">  &bull; env vars&nbsp;&nbsp;&nbsp;&nbsp;12</div>
+        <div class="term-line dim">  &bull; services&nbsp;&nbsp;&nbsp;&nbsp;api, postgres, redis</div>
+        <div class="term-line">&nbsp;</div>
+        <div class="term-line"><span class="prompt">$</span> <span class="cmd">pylot switch mobile-app</span></div>
+        <div class="term-line dim">  <span class="check">&check;</span> Switched to 'mobile-app'</div>
+        <div class="term-line dim">&nbsp;</div>
+        <div class="term-line dim">  &bull; path&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;~/Projects/mobile-app</div>
+        <div class="term-line dim">  &bull; branch&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="purple">main</span></div>
+        <div class="term-line dim">  &bull; last used&nbsp;&nbsp;&nbsp;2 days ago</div>
+      </div>
+    </div>
+    <div class="hero-install">
+      <code>curl -fsSL https://raw.githubusercontent.com/gedaliahs/pylot/main/install.sh | sh</code>
+      <button onclick="copyInstall()" id="copy-btn">Copy</button>
+    </div>
+  </section>
+
+  <!-- Problem -->
+  <section class="section" id="problem">
+    <div class="container">
+      <h2>The problem</h2>
+      <p class="section-sub">Every developer juggles multiple projects. Switching between them is a mess.</p>
+      <div class="problem-grid">
+        <div class="problem-card">
+          <div class="problem-icon">1</div>
+          <h3>cd into the directory</h3>
+          <p>Then remember which branch you were on. <code>git checkout</code>... which one was it?</p>
+        </div>
+        <div class="problem-card">
+          <div class="problem-icon">2</div>
+          <h3>Set up env vars</h3>
+          <p>Re-source your <code>.env</code> file. Or was it <code>.env.local</code>? Did the API key change?</p>
+        </div>
+        <div class="problem-card">
+          <div class="problem-icon">3</div>
+          <h3>Start services</h3>
+          <p>Spin up the dev server, database, worker. Oh wait, port 3000 is still used by the other project.</p>
+        </div>
+        <div class="problem-card">
+          <div class="problem-icon">4</div>
+          <h3>Remember what you were doing</h3>
+          <p>What file were you editing? What was the bug? You've lost 10 minutes just getting back to where you were.</p>
+        </div>
+      </div>
+      <div class="solution-arrow">
+        <div class="arrow-line"></div>
+        <div class="arrow-text">pylot does all of this in one command</div>
+        <div class="arrow-line"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- How it works -->
+  <section class="section dark" id="how-it-works">
+    <div class="container">
+      <h2>How it works</h2>
+      <p class="section-sub">Three concepts. That's it.</p>
+      <div class="steps">
+        <div class="step">
+          <div class="step-num">1</div>
+          <div class="step-content">
+            <h3>Save a context</h3>
+            <p>
+              When you're in a project directory, run <code>pylot save &lt;name&gt;</code>.
+              pylot snapshots your current state: directory, git branch, env vars, and reads your
+              <code>.pylot.toml</code> for services and ports.
+            </p>
+            <div class="mini-term">
+              <span class="prompt">~/api $</span> pylot save api
+            </div>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">2</div>
+          <div class="step-content">
+            <h3>Switch between contexts</h3>
+            <p>
+              Run <code>pylot switch &lt;name&gt;</code> from anywhere.
+              pylot will: <code>cd</code> to the project, checkout your branch, load env vars,
+              start services, and kill port conflicts. All automatically.
+            </p>
+            <div class="mini-term">
+              <span class="prompt">~/mobile $</span> pylot switch api
+            </div>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">3</div>
+          <div class="step-content">
+            <h3>Use the dashboard</h3>
+            <p>
+              Run <code>pylot</code> with no arguments to open an interactive TUI.
+              Browse all your projects, see service health, port status, and switch
+              with Enter.
+            </p>
+            <div class="mini-term">
+              <span class="prompt">~ $</span> pylot
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- What pylot tracks -->
+  <section class="section" id="what-it-tracks">
+    <div class="container">
+      <h2>What pylot tracks</h2>
+      <p class="section-sub">Everything you need to resume working, nothing you don't.</p>
+      <div class="track-grid">
+        <div class="track-card">
+          <div class="track-icon">&#x1f4c2;</div>
+          <h3>Project Directory</h3>
+          <p><code>cd</code>'s you to the right place instantly</p>
+        </div>
+        <div class="track-card">
+          <div class="track-icon">&#x1f33f;</div>
+          <h3>Git Branch</h3>
+          <p>Checks out the branch you were on. Warns about uncommitted changes.</p>
+        </div>
+        <div class="track-card">
+          <div class="track-icon">&#x1f511;</div>
+          <h3>Env Variables</h3>
+          <p>Loads your <code>.env</code> file and exports variables into the shell.</p>
+        </div>
+        <div class="track-card">
+          <div class="track-icon">&#x2699;&#xfe0f;</div>
+          <h3>Services</h3>
+          <p>Starts dev servers, databases, workers. Stops them when you switch away.</p>
+        </div>
+        <div class="track-card">
+          <div class="track-icon">&#x1f6a2;</div>
+          <h3>Ports</h3>
+          <p>Detects conflicts and offers to kill blocking processes before switching.</p>
+        </div>
+        <div class="track-card">
+          <div class="track-icon">&#x1f552;</div>
+          <h3>Last Accessed</h3>
+          <p>Shows when you last worked on each project so you know where you left off.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Commands -->
+  <section class="section dark" id="commands">
+    <div class="container">
+      <h2>Commands</h2>
+      <p class="section-sub">Everything pylot can do.</p>
+      <div class="cmd-table">
+        <div class="cmd-row header">
+          <div class="cmd-name">Command</div>
+          <div class="cmd-desc">What it does</div>
+        </div>
+        <div class="cmd-row">
+          <div class="cmd-name"><code>pylot save &lt;name&gt;</code></div>
+          <div class="cmd-desc">Save the current directory as a named context. Captures git branch, env vars, and reads <code>.pylot.toml</code>.</div>
+        </div>
+        <div class="cmd-row">
+          <div class="cmd-name"><code>pylot switch &lt;name&gt;</code></div>
+          <div class="cmd-desc">Switch to a saved context. Restores directory, branch, env, starts services, resolves port conflicts.</div>
+        </div>
+        <div class="cmd-row">
+          <div class="cmd-name"><code>pylot list</code></div>
+          <div class="cmd-desc">Show all saved contexts with their branch, service status, and last access time.</div>
+        </div>
+        <div class="cmd-row">
+          <div class="cmd-name"><code>pylot status</code></div>
+          <div class="cmd-desc">Show the current directory's context: branch, env vars, dirty state, active ports.</div>
+        </div>
+        <div class="cmd-row">
+          <div class="cmd-name"><code>pylot init</code></div>
+          <div class="cmd-desc">Generate a <code>.pylot.toml</code> config file in the current directory with smart defaults.</div>
+        </div>
+        <div class="cmd-row">
+          <div class="cmd-name"><code>pylot stop [name]</code></div>
+          <div class="cmd-desc">Stop all running services for a context.</div>
+        </div>
+        <div class="cmd-row">
+          <div class="cmd-name"><code>pylot remove &lt;name&gt;</code></div>
+          <div class="cmd-desc">Delete a saved context and stop its services.</div>
+        </div>
+        <div class="cmd-row">
+          <div class="cmd-name"><code>pylot shell-init [shell]</code></div>
+          <div class="cmd-desc">Print the shell hook to add to your <code>.zshrc</code> / <code>.bashrc</code> / <code>config.fish</code>.</div>
+        </div>
+        <div class="cmd-row">
+          <div class="cmd-name"><code>pylot</code></div>
+          <div class="cmd-desc">Open the interactive TUI dashboard. Navigate with arrow keys, switch with Enter.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Config -->
+  <section class="section" id="config">
+    <div class="container">
+      <h2>Project config</h2>
+      <p class="section-sub">
+        Drop a <code>.pylot.toml</code> in your project root to define services and ports.
+        Run <code>pylot init</code> to generate one automatically.
+      </p>
+      <div class="config-example">
+        <div class="config-bar">
+          <span>.pylot.toml</span>
+        </div>
+        <pre><code><span class="toml-comment"># Which env file to load</span>
+<span class="toml-key">env_file</span> = <span class="toml-string">".env.development"</span>
+
+<span class="toml-comment"># Services to start when switching to this project</span>
+<span class="toml-section">[services]</span>
+<span class="toml-key">api</span>    = <span class="toml-string">"npm run dev"</span>
+<span class="toml-key">db</span>     = <span class="toml-string">"docker compose up postgres -d"</span>
+<span class="toml-key">worker</span> = <span class="toml-string">"npm run worker"</span>
+
+<span class="toml-comment"># Ports your project needs &mdash; pylot warns about conflicts</span>
+<span class="toml-section">[ports]</span>
+<span class="toml-key">required</span> = [<span class="toml-num">3000</span>, <span class="toml-num">5432</span>, <span class="toml-num">6379</span>]</code></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- Setup -->
+  <section class="section dark" id="install">
+    <div class="container">
+      <h2>Setup</h2>
+      <p class="section-sub">Two steps. Under a minute.</p>
+      <div class="setup-steps">
+        <div class="setup-step">
+          <h3>1. Install pylot</h3>
+          <div class="setup-options">
+            <div class="setup-option">
+              <span class="setup-label">curl</span>
+              <code>curl -fsSL https://raw.githubusercontent.com/gedaliahs/pylot/main/install.sh | sh</code>
+            </div>
+            <div class="setup-option">
+              <span class="setup-label">cargo</span>
+              <code>cargo install --git https://github.com/gedaliahs/pylot</code>
+            </div>
+            <div class="setup-option">
+              <span class="setup-label">npm</span>
+              <code>npm install -g pylot-cli</code>
+            </div>
+          </div>
+        </div>
+        <div class="setup-step">
+          <h3>2. Add the shell hook</h3>
+          <p>This lets pylot actually <code>cd</code> and <code>export</code> in your shell (without it, pylot can only print commands).</p>
+          <div class="setup-options">
+            <div class="setup-option">
+              <span class="setup-label">zsh</span>
+              <code>eval "$(pylot shell-init zsh)" >> ~/.zshrc</code>
+            </div>
+            <div class="setup-option">
+              <span class="setup-label">bash</span>
+              <code>eval "$(pylot shell-init bash)" >> ~/.bashrc</code>
+            </div>
+            <div class="setup-option">
+              <span class="setup-label">fish</span>
+              <code>pylot shell-init fish >> ~/.config/fish/config.fish</code>
+            </div>
+          </div>
+        </div>
+        <div class="setup-step">
+          <h3>3. Start using it</h3>
+          <div class="mini-term wide">
+            <div><span class="prompt">~/myproject $</span> pylot init&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="dim"># creates .pylot.toml</span></div>
+            <div><span class="prompt">~/myproject $</span> pylot save myproject <span class="dim"># saves context</span></div>
+            <div><span class="prompt">~/myproject $</span> pylot switch other&nbsp;&nbsp;&nbsp;<span class="dim"># switches away</span></div>
+            <div><span class="prompt">~/other $</span> pylot&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="dim"># opens dashboard</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer>
+    <div class="container">
+      <div class="footer-inner">
+        <span class="logo">pylot</span>
+        <span class="footer-links">
+          <a href="https://github.com/gedaliahs/pylot" target="_blank">GitHub</a>
+          <a href="https://github.com/gedaliahs/pylot/issues" target="_blank">Issues</a>
+        </span>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    function copyInstall() {
+      const text = 'curl -fsSL https://raw.githubusercontent.com/gedaliahs/pylot/main/install.sh | sh';
+      navigator.clipboard.writeText(text).then(() => {
+        const btn = document.getElementById('copy-btn');
+        btn.textContent = 'Copied!';
+        setTimeout(() => btn.textContent = 'Copy', 2000);
+      });
+    }
+  </script>
+</body>
+</html>

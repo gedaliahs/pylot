@@ -1,5 +1,6 @@
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::{Shell, generate};
 
 use crate::context::ProjectContext;
 use crate::services::ServiceManager;
@@ -8,17 +9,18 @@ use crate::style;
 #[derive(Parser)]
 #[command(
     name = "pylot",
-    about = "Project context switcher",
+    about = "Switch between projects without losing your place",
     version,
     after_help = format!(
-        "{}{}Examples:{}\n  \
-        pylot save myproject      Save current directory as a context\n  \
-        pylot switch myproject    Switch to a saved context\n  \
-        pylot list                Show all saved contexts\n  \
-        pylot                     Open interactive dashboard\n\n  \
-        {}Get started:{} pylot init\n",
+        "{}{}Quick start:{}\n  \
+        pylot save api            Save this project as 'api'\n  \
+        pylot switch api          Jump back to 'api' anytime\n  \
+        pylot                     Browse all projects interactively\n\n  \
+        {}First time?{} Run {}pylot init{} in your project, then {}pylot save <name>{}\n",
         style::BOLD, style::WHITE, style::RESET,
         style::DIM, style::RESET,
+        style::CYAN, style::RESET,
+        style::CYAN, style::RESET,
     ),
 )]
 pub struct Cli {
@@ -28,68 +30,162 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Save the current project context
+    /// Save this project so you can come back to it later
     Save {
-        /// Name for this context
-        name: String,
+        /// A short name for this project (e.g. 'api', 'frontend', 'mobile')
+        name: Option<String>,
     },
-    /// Switch to a saved project context
+    /// Jump to a saved project (restores branch, env, services)
     Switch {
-        /// Context name to switch to
+        /// Project name (supports partial matching)
         name: String,
-        /// Skip dirty state warning
+        /// Skip the uncommitted changes warning
         #[arg(long)]
         force: bool,
     },
-    /// List all saved contexts
+    /// Show all your saved projects
     List,
-    /// Show status of the current context
+    /// Show what's happening in the current directory
     Status,
-    /// Remove a saved context
+    /// Forget a saved project
     Remove {
-        /// Context name to remove
+        /// Project name to forget
         name: String,
     },
-    /// Initialize a .pylot.toml config in the current directory
+    /// Set up a .pylot.toml config for this project
     Init,
-    /// Stop all services for a context
+    /// Stop running services for a project
     Stop {
-        /// Context name (defaults to current directory name)
+        /// Project name (defaults to current directory)
         name: Option<String>,
     },
-    /// Show the shell hook script to add to your shell profile
+    /// Check your pylot setup for issues
+    Doctor,
+    /// Print shell hook (add to your .zshrc/.bashrc)
     ShellInit {
-        /// Shell type (bash, zsh, fish)
+        /// Shell type
         #[arg(default_value = "zsh")]
         shell: String,
+    },
+    /// Generate shell completions
+    Completions {
+        /// Shell type
+        shell: Shell,
     },
 }
 
 pub fn run(cli: Cli) -> Result<()> {
     match cli.command {
-        Some(Commands::Save { name }) => cmd_save(&name),
+        Some(Commands::Save { name }) => cmd_save(name.as_deref()),
         Some(Commands::Switch { name, force }) => cmd_switch(&name, force),
         Some(Commands::List) => cmd_list(),
         Some(Commands::Status) => cmd_status(),
         Some(Commands::Remove { name }) => cmd_remove(&name),
         Some(Commands::Init) => cmd_init(),
         Some(Commands::Stop { name }) => cmd_stop(name.as_deref()),
+        Some(Commands::Doctor) => cmd_doctor(),
         Some(Commands::ShellInit { shell }) => cmd_shell_init(&shell),
-        None => crate::tui::run_dashboard(),
+        Some(Commands::Completions { shell }) => cmd_completions(shell),
+        None => {
+            let contexts = ProjectContext::list_all()?;
+            if contexts.is_empty() {
+                cmd_onboarding()
+            } else {
+                crate::tui::run_dashboard()
+            }
+        }
     }
 }
 
-fn cmd_save(name: &str) -> Result<()> {
-    let ctx = ProjectContext::capture_current(name)?;
+// ── Onboarding (first run with no contexts) ─────────────
+
+fn cmd_onboarding() -> Result<()> {
+    style::banner();
+    style::divider();
+    style::blank();
+    eprintln!(
+        "  {}Welcome!{} pylot saves and restores your dev environment",
+        style::BOLD, style::RESET,
+    );
+    eprintln!(
+        "  so you can switch between projects without losing your place.",
+    );
+    style::blank();
+    style::divider();
+    style::blank();
+    eprintln!(
+        "  {}{}Get started in 3 steps:{}",
+        style::BOLD, style::WHITE, style::RESET,
+    );
+    style::blank();
+    eprintln!(
+        "  {}1.{} Go to a project directory:",
+        style::CYAN, style::RESET,
+    );
+    eprintln!(
+        "     {}$ cd ~/Projects/my-api{}",
+        style::DIM, style::RESET,
+    );
+    style::blank();
+    eprintln!(
+        "  {}2.{} Save it with a short name:",
+        style::CYAN, style::RESET,
+    );
+    eprintln!(
+        "     {}$ pylot save api{}",
+        style::DIM, style::RESET,
+    );
+    style::blank();
+    eprintln!(
+        "  {}3.{} Switch back to it from anywhere:",
+        style::CYAN, style::RESET,
+    );
+    eprintln!(
+        "     {}$ pylot switch api{}",
+        style::DIM, style::RESET,
+    );
+    style::blank();
+    style::divider();
+    style::blank();
+    style::hint("Optional: run 'pylot init' first to set up services & ports");
+    style::hint("Run 'pylot doctor' to check your setup");
+    style::blank();
+
+    Ok(())
+}
+
+// ── Save ────────────────────────────────────────────────
+
+fn cmd_save(name: Option<&str>) -> Result<()> {
+    let cwd = std::env::current_dir()?;
+
+    // Auto-generate name from directory if not provided
+    let name = match name {
+        Some(n) => n.to_string(),
+        None => {
+            let dir_name = cwd
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "project".to_string())
+                .to_lowercase()
+                .replace(' ', "-");
+            dir_name
+        }
+    };
+
+    let ctx = ProjectContext::capture_current(&name)?;
     ctx.save()?;
 
     style::blank();
-    style::success(&format!("Context {}{}{} saved", style::BOLD, name, style::RESET));
+    style::success(&format!(
+        "Saved as {}{}{}",
+        style::BOLD, name, style::RESET
+    ));
     style::blank();
     style::item("path", &ctx.path.display().to_string());
     style::item_colored(
         "branch",
-        ctx.git_branch.as_deref().unwrap_or("n/a"),
+        ctx.git_branch.as_deref().unwrap_or("–"),
         style::MAGENTA,
     );
     style::item("env vars", &format!("{}", ctx.env_vars.len()));
@@ -99,23 +195,39 @@ fn cmd_save(name: &str) -> Result<()> {
             &ctx.services.keys().cloned().collect::<Vec<_>>().join(", "),
         );
     }
+    if !ctx.ports_required.is_empty() {
+        style::item(
+            "ports",
+            &ctx.ports_required
+                .iter()
+                .map(|p| p.to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
+    }
     style::blank();
-    style::hint(&format!("Switch with: pylot switch {}", name));
+    style::hint(&format!("Jump back with: pylot switch {}", name));
     style::blank();
 
     Ok(())
 }
 
+// ── Switch ──────────────────────────────────────────────
+
 fn cmd_switch(name: &str, force: bool) -> Result<()> {
+    // Fuzzy match: find the best matching context
+    let resolved = fuzzy_resolve(name)?;
+
+    // Warn about dirty state
     if !force {
         let cwd = std::env::current_dir()?;
         if ProjectContext::has_dirty_git_state(&cwd) {
             if let Some(summary) = ProjectContext::dirty_summary(&cwd) {
                 style::blank();
-                style::warn(&format!("Uncommitted changes: {}", summary));
+                style::warn(&format!("You have uncommitted changes: {}", summary));
                 if !style::confirm("Switch anyway?") {
                     style::blank();
-                    style::hint("Commit or stash your changes, or use --force");
+                    style::hint("Commit or stash first, or use --force");
                     style::blank();
                     return Ok(());
                 }
@@ -123,13 +235,35 @@ fn cmd_switch(name: &str, force: bool) -> Result<()> {
         }
     }
 
-    let ctx = ProjectContext::load(name)?;
+    // Auto-stop services for the current context before switching
+    let cwd = std::env::current_dir()?;
+    let current_dir_name = cwd
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
     let service_mgr = ServiceManager::new();
+    let current_health = service_mgr.service_health(&current_dir_name);
+    if !current_health.is_empty() {
+        let running: Vec<_> = current_health.iter().filter(|(_, _, a)| *a).collect();
+        if !running.is_empty() {
+            eprintln!(
+                "  {}Stopping {} service(s) for '{}'...{}",
+                style::DIM,
+                running.len(),
+                current_dir_name,
+                style::RESET,
+            );
+            service_mgr.stop_services(&current_dir_name)?;
+        }
+    }
 
+    let ctx = ProjectContext::load(&resolved)?;
+
+    // Port conflicts
     let conflicts = service_mgr.check_port_conflicts(&ctx.ports_required);
     if !conflicts.is_empty() {
         style::blank();
-        style::warn("Port conflicts detected:");
+        style::warn("Port conflicts:");
         for (port, pid, proc_name) in &conflicts {
             style::item(
                 &format!(":{}", port),
@@ -137,23 +271,24 @@ fn cmd_switch(name: &str, force: bool) -> Result<()> {
             );
         }
         style::blank();
-        if style::confirm("Kill conflicting processes?") {
+        if style::confirm("Kill these processes?") {
             for (_, pid, _) in &conflicts {
                 service_mgr.kill_process(*pid)?;
             }
-            style::success("Processes killed");
         }
     }
 
+    // Start services for the new context
     if !ctx.services.is_empty() {
-        style::section("Services");
+        style::blank();
         service_mgr.start_services(&ctx)?;
     }
 
+    // Summary
     style::blank();
     style::success(&format!(
-        "Switched to {}{}{}",
-        style::BOLD, name, style::RESET
+        "Now in {}{}{}",
+        style::BOLD, resolved, style::RESET,
     ));
     style::blank();
     style::item("path", &ctx.path.display().to_string());
@@ -161,21 +296,24 @@ fn cmd_switch(name: &str, force: bool) -> Result<()> {
         style::item_colored("branch", branch, style::MAGENTA);
     }
     if let Some(ref last) = ctx.last_accessed {
-        style::item("last used", &last.format("%Y-%m-%d %H:%M").to_string());
+        style::item("last used", &last.format("%b %d at %H:%M").to_string());
     }
     style::blank();
 
+    // Shell commands for the wrapper to eval
     ctx.print_shell_commands();
 
     Ok(())
 }
 
+// ── List ────────────────────────────────────────────────
+
 fn cmd_list() -> Result<()> {
     let contexts = ProjectContext::list_all()?;
     if contexts.is_empty() {
         style::empty_state(
-            "No saved contexts yet.",
-            "Run pylot save <name> in a project directory to get started.",
+            "No projects saved yet.",
+            "cd into a project and run: pylot save <name>",
         );
         return Ok(());
     }
@@ -183,7 +321,7 @@ fn cmd_list() -> Result<()> {
     let service_mgr = ServiceManager::new();
 
     style::blank();
-    style::heading("Your Contexts");
+    style::heading(&format!("Your Projects ({})", contexts.len()));
     style::blank();
     style::table_header();
 
@@ -193,7 +331,7 @@ fn cmd_list() -> Result<()> {
             "–".to_string()
         } else {
             let alive = health.iter().filter(|(_, _, a)| *a).count();
-            format!("{}/{} up", alive, health.len())
+            format!("{}/{}", alive, health.len())
         };
 
         style::table_row(
@@ -211,17 +349,19 @@ fn cmd_list() -> Result<()> {
     Ok(())
 }
 
+// ── Status ──────────────────────────────────────────────
+
 fn cmd_status() -> Result<()> {
     let ctx = ProjectContext::detect_current()?;
     let service_mgr = ServiceManager::new();
 
     style::blank();
-    style::heading(&format!("Status: {}", ctx.name));
+    style::heading(&ctx.name);
     style::blank();
     style::item("path", &ctx.path.display().to_string());
     style::item_colored(
         "branch",
-        ctx.git_branch.as_deref().unwrap_or("n/a"),
+        ctx.git_branch.as_deref().unwrap_or("–"),
         style::MAGENTA,
     );
     style::item("env vars", &format!("{}", ctx.env_vars.len()));
@@ -258,7 +398,7 @@ fn cmd_status() -> Result<()> {
 
     let active_ports = service_mgr.get_listening_ports();
     if !active_ports.is_empty() {
-        style::section("Active Ports");
+        style::section("Ports");
         for (port, proc_name) in &active_ports {
             eprintln!(
                 "  {}  {}:{}{} {}{}{}",
@@ -273,23 +413,29 @@ fn cmd_status() -> Result<()> {
     Ok(())
 }
 
+// ── Remove ──────────────────────────────────────────────
+
 fn cmd_remove(name: &str) -> Result<()> {
+    let resolved = fuzzy_resolve(name)?;
+
     style::blank();
-    if !style::confirm(&format!("Remove context '{}'?", name)) {
+    if !style::confirm(&format!("Forget project '{}'?", resolved)) {
         style::hint("Cancelled.");
         style::blank();
         return Ok(());
     }
 
     let service_mgr = ServiceManager::new();
-    service_mgr.stop_services(name)?;
-    ProjectContext::remove(name)?;
+    service_mgr.stop_services(&resolved)?;
+    ProjectContext::remove(&resolved)?;
 
-    style::success(&format!("Context '{}' removed", name));
+    style::success(&format!("'{}' forgotten", resolved));
     style::blank();
 
     Ok(())
 }
+
+// ── Init ────────────────────────────────────────────────
 
 fn cmd_init() -> Result<()> {
     let cwd = std::env::current_dir()?;
@@ -298,7 +444,7 @@ fn cmd_init() -> Result<()> {
     style::blank();
 
     if config_path.exists() {
-        style::warn(".pylot.toml already exists in this directory.");
+        style::warn(".pylot.toml already exists here.");
         style::blank();
         return Ok(());
     }
@@ -308,11 +454,14 @@ fn cmd_init() -> Result<()> {
 
     style::success("Created .pylot.toml");
     style::blank();
-    style::hint("Edit it to define your services and required ports, then:");
-    style::blank();
-    let dir_name = cwd.file_name()
+
+    let dir_name = cwd
+        .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "myproject".to_string());
+
+    style::hint("Edit .pylot.toml to add your services and ports, then:");
+    style::blank();
     eprintln!(
         "    {}$ pylot save {}{}",
         style::DIM, dir_name, style::RESET,
@@ -322,9 +471,11 @@ fn cmd_init() -> Result<()> {
     Ok(())
 }
 
+// ── Stop ────────────────────────────────────────────────
+
 fn cmd_stop(name: Option<&str>) -> Result<()> {
     let context_name = match name {
-        Some(n) => n.to_string(),
+        Some(n) => fuzzy_resolve(n)?,
         None => {
             let cwd = std::env::current_dir()?;
             cwd.file_name()
@@ -345,16 +496,133 @@ fn cmd_stop(name: Option<&str>) -> Result<()> {
     }
 
     service_mgr.stop_services(&context_name)?;
-    style::success(&format!("All services stopped for '{}'", context_name));
+    style::success(&format!("Stopped all services for '{}'", context_name));
     style::blank();
 
     Ok(())
 }
 
+// ── Doctor ──────────────────────────────────────────────
+
+fn cmd_doctor() -> Result<()> {
+    style::blank();
+    style::heading("pylot doctor");
+    style::blank();
+
+    let mut issues = 0;
+
+    // Check: shell hook installed?
+    let shell = std::env::var("SHELL").unwrap_or_default();
+    let shell_name = shell.rsplit('/').next().unwrap_or("zsh");
+    let rc_file = match shell_name {
+        "zsh" => dirs::home_dir().map(|h| h.join(".zshrc")),
+        "bash" => dirs::home_dir().map(|h| h.join(".bashrc")),
+        "fish" => dirs::home_dir().map(|h| h.join(".config/fish/config.fish")),
+        _ => None,
+    };
+
+    let hook_installed = rc_file
+        .as_ref()
+        .and_then(|f| std::fs::read_to_string(f).ok())
+        .map(|content| content.contains("pylot"))
+        .unwrap_or(false);
+
+    if hook_installed {
+        eprintln!("  {} Shell hook      {}installed{}", style::CHECK, style::GREEN, style::RESET);
+    } else {
+        eprintln!("  {} Shell hook      {}not installed{}", style::CROSS, style::RED, style::RESET);
+        eprintln!(
+            "     {}Run: eval \"$(pylot shell-init {})\" >> ~/{}{}",
+            style::DIM,
+            shell_name,
+            rc_file
+                .as_ref()
+                .map(|f| f.file_name().unwrap_or_default().to_string_lossy().to_string())
+                .unwrap_or_else(|| ".zshrc".to_string()),
+            style::RESET,
+        );
+        issues += 1;
+    }
+
+    // Check: git installed?
+    let git_ok = std::process::Command::new("git")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
+    if git_ok {
+        eprintln!("  {} Git             {}found{}", style::CHECK, style::GREEN, style::RESET);
+    } else {
+        eprintln!("  {} Git             {}not found{}", style::CROSS, style::RED, style::RESET);
+        issues += 1;
+    }
+
+    // Check: config dir exists?
+    let config_dir = ProjectContext::config_dir()?;
+    if config_dir.exists() {
+        eprintln!("  {} Config dir      {}~/.pylot{}", style::CHECK, style::GREEN, style::RESET);
+    } else {
+        eprintln!("  {} Config dir      {}will be created on first save{}", style::DOT, style::DIM, style::RESET);
+    }
+
+    // Check: saved contexts
+    let contexts = ProjectContext::list_all()?;
+    eprintln!(
+        "  {} Saved projects  {}{} project(s){}",
+        style::CHECK,
+        style::GREEN,
+        contexts.len(),
+        style::RESET,
+    );
+
+    // Check: any stale contexts (pointing to deleted directories)?
+    let stale: Vec<_> = contexts
+        .iter()
+        .filter(|c| !c.path.exists())
+        .collect();
+    if !stale.is_empty() {
+        eprintln!(
+            "  {} Stale projects  {}{} point to missing directories{}",
+            style::WARN,
+            style::YELLOW,
+            stale.len(),
+            style::RESET,
+        );
+        for ctx in &stale {
+            eprintln!(
+                "     {}{} → {}{}",
+                style::DIM, ctx.name, ctx.path.display(), style::RESET,
+            );
+        }
+        issues += 1;
+    }
+
+    // Check: .pylot.toml in current directory?
+    let cwd = std::env::current_dir()?;
+    if cwd.join(".pylot.toml").exists() {
+        eprintln!("  {} Project config  {}.pylot.toml found{}", style::CHECK, style::GREEN, style::RESET);
+    } else {
+        eprintln!("  {} Project config  {}no .pylot.toml here (optional){}", style::DOT, style::DIM, style::RESET);
+    }
+
+    style::blank();
+    if issues == 0 {
+        style::success("Everything looks good!");
+    } else {
+        style::warn(&format!("{} issue(s) found above", issues));
+    }
+    style::blank();
+
+    Ok(())
+}
+
+// ── Shell init ──────────────────────────────────────────
+
 fn cmd_shell_init(shell: &str) -> Result<()> {
     match shell {
         "bash" | "zsh" => {
-            println!(r#"# Add this to your ~/.{}rc
+            println!(r#"# pylot shell integration — add to your ~/.{}rc
 pylot() {{
     if [ "$1" = "switch" ] && [ -n "$2" ]; then
         local output
@@ -379,7 +647,7 @@ pylot() {{
 }}"#, shell);
         }
         "fish" => {
-            println!(r#"# Add this to your ~/.config/fish/config.fish
+            println!(r#"# pylot shell integration — add to your ~/.config/fish/config.fish
 function pylot
     if test "$argv[1]" = "switch" -a -n "$argv[2]"
         set -l output (command pylot switch $argv[2..] 2>&1)
@@ -408,8 +676,91 @@ function pylot
 end"#);
         }
         _ => {
-            style::error(&format!("Unsupported shell: {}. Supported: bash, zsh, fish", shell));
+            style::error(&format!("Unsupported shell: {}. Use: bash, zsh, or fish", shell));
         }
     }
     Ok(())
+}
+
+// ── Completions ─────────────────────────────────────────
+
+fn cmd_completions(shell: Shell) -> Result<()> {
+    let mut cmd = Cli::command();
+    generate(shell, &mut cmd, "pylot", &mut std::io::stdout());
+    Ok(())
+}
+
+// ── Fuzzy matching ──────────────────────────────────────
+
+fn fuzzy_resolve(input: &str) -> Result<String> {
+    // Try exact match first
+    let contexts = ProjectContext::list_all()?;
+
+    // Exact match
+    if let Some(ctx) = contexts.iter().find(|c| c.name == input) {
+        return Ok(ctx.name.clone());
+    }
+
+    // Prefix match
+    let prefix_matches: Vec<_> = contexts
+        .iter()
+        .filter(|c| c.name.starts_with(input))
+        .collect();
+
+    if prefix_matches.len() == 1 {
+        let matched = &prefix_matches[0].name;
+        eprintln!(
+            "  {}Matched '{}' → '{}'{}",
+            style::DIM, input, matched, style::RESET,
+        );
+        return Ok(matched.clone());
+    }
+
+    // Contains match
+    let contains_matches: Vec<_> = contexts
+        .iter()
+        .filter(|c| c.name.contains(input))
+        .collect();
+
+    if contains_matches.len() == 1 {
+        let matched = &contains_matches[0].name;
+        eprintln!(
+            "  {}Matched '{}' → '{}'{}",
+            style::DIM, input, matched, style::RESET,
+        );
+        return Ok(matched.clone());
+    }
+
+    // Multiple matches
+    if !prefix_matches.is_empty() || !contains_matches.is_empty() {
+        let matches = if !prefix_matches.is_empty() {
+            prefix_matches
+        } else {
+            contains_matches
+        };
+        style::blank();
+        style::warn(&format!("'{}' matches multiple projects:", input));
+        for m in &matches {
+            eprintln!("     {} {}", style::ARROW, m.name);
+        }
+        style::blank();
+        anyhow::bail!("Be more specific.");
+    }
+
+    // No match at all — suggest closest
+    style::blank();
+    style::error(&format!("No project named '{}'", input));
+
+    if !contexts.is_empty() {
+        style::blank();
+        style::hint("Your saved projects:");
+        for ctx in &contexts {
+            eprintln!("     {} {}", style::ARROW, ctx.name);
+        }
+    } else {
+        style::hint("No projects saved yet. Run: pylot save <name>");
+    }
+    style::blank();
+
+    anyhow::bail!("Project not found.");
 }

@@ -6,6 +6,7 @@ description = "Project context switcher — restore your full dev environment in
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
 ratatui = "0.29"
 crossterm = "0.28"
 serde = { version = "1", features = ["derive"] }
