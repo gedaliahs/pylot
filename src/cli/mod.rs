@@ -3,9 +3,24 @@ use clap::{Parser, Subcommand};
 
 use crate::context::ProjectContext;
 use crate::services::ServiceManager;
+use crate::style;
 
 #[derive(Parser)]
-#[command(name = "pylot", about = "Project context switcher", version)]
+#[command(
+    name = "pylot",
+    about = "Project context switcher",
+    version,
+    after_help = format!(
+        "{}{}Examples:{}\n  \
+        pylot save myproject      Save current directory as a context\n  \
+        pylot switch myproject    Switch to a saved context\n  \
+        pylot list                Show all saved contexts\n  \
+        pylot                     Open interactive dashboard\n\n  \
+        {}Get started:{} pylot init\n",
+        style::BOLD, style::WHITE, style::RESET,
+        style::DIM, style::RESET,
+    ),
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Commands>,
@@ -67,29 +82,41 @@ pub fn run(cli: Cli) -> Result<()> {
 fn cmd_save(name: &str) -> Result<()> {
     let ctx = ProjectContext::capture_current(name)?;
     ctx.save()?;
-    println!("Context '{}' saved.", name);
-    println!("  Path:   {}", ctx.path.display());
-    println!("  Branch: {}", ctx.git_branch.as_deref().unwrap_or("n/a"));
-    println!("  Env:    {} variables", ctx.env_vars.len());
+
+    style::blank();
+    style::success(&format!("Context {}{}{} saved", style::BOLD, name, style::RESET));
+    style::blank();
+    style::item("path", &ctx.path.display().to_string());
+    style::item_colored(
+        "branch",
+        ctx.git_branch.as_deref().unwrap_or("n/a"),
+        style::MAGENTA,
+    );
+    style::item("env vars", &format!("{}", ctx.env_vars.len()));
     if !ctx.services.is_empty() {
-        println!("  Services: {}", ctx.services.keys().cloned().collect::<Vec<_>>().join(", "));
+        style::item(
+            "services",
+            &ctx.services.keys().cloned().collect::<Vec<_>>().join(", "),
+        );
     }
+    style::blank();
+    style::hint(&format!("Switch with: pylot switch {}", name));
+    style::blank();
+
     Ok(())
 }
 
 fn cmd_switch(name: &str, force: bool) -> Result<()> {
-    // Check for dirty state in the current directory before switching
     if !force {
         let cwd = std::env::current_dir()?;
         if ProjectContext::has_dirty_git_state(&cwd) {
             if let Some(summary) = ProjectContext::dirty_summary(&cwd) {
-                eprintln!("Warning: Current directory has uncommitted changes ({}).", summary);
-                eprintln!("Use --force to switch anyway, or commit/stash your changes first.");
-                eprint!("Switch anyway? [y/N] ");
-                let mut input = String::new();
-                std::io::stdin().read_line(&mut input)?;
-                if !input.trim().eq_ignore_ascii_case("y") {
-                    eprintln!("Aborted.");
+                style::blank();
+                style::warn(&format!("Uncommitted changes: {}", summary));
+                if !style::confirm("Switch anyway?") {
+                    style::blank();
+                    style::hint("Commit or stash your changes, or use --force");
+                    style::blank();
                     return Ok(());
                 }
             }
@@ -99,40 +126,45 @@ fn cmd_switch(name: &str, force: bool) -> Result<()> {
     let ctx = ProjectContext::load(name)?;
     let service_mgr = ServiceManager::new();
 
-    // Check for port conflicts before switching
     let conflicts = service_mgr.check_port_conflicts(&ctx.ports_required);
     if !conflicts.is_empty() {
-        eprintln!("Port conflicts detected:");
+        style::blank();
+        style::warn("Port conflicts detected:");
         for (port, pid, proc_name) in &conflicts {
-            eprintln!("  Port {} in use by {} (PID {})", port, proc_name, pid);
+            style::item(
+                &format!(":{}", port),
+                &format!("{} (PID {})", proc_name, pid),
+            );
         }
-        eprint!("Kill conflicting processes? [y/N] ");
-        let mut input = String::new();
-        std::io::stdin().read_line(&mut input)?;
-        if input.trim().eq_ignore_ascii_case("y") {
+        style::blank();
+        if style::confirm("Kill conflicting processes?") {
             for (_, pid, _) in &conflicts {
                 service_mgr.kill_process(*pid)?;
             }
+            style::success("Processes killed");
         }
     }
 
-    // Start services
     if !ctx.services.is_empty() {
-        eprintln!("Starting services...");
+        style::section("Services");
         service_mgr.start_services(&ctx)?;
     }
 
-    // Print switch summary to stderr (stdout is reserved for shell commands)
-    eprintln!("Switched to '{}'", name);
-    eprintln!("  Path:   {}", ctx.path.display());
+    style::blank();
+    style::success(&format!(
+        "Switched to {}{}{}",
+        style::BOLD, name, style::RESET
+    ));
+    style::blank();
+    style::item("path", &ctx.path.display().to_string());
     if let Some(ref branch) = ctx.git_branch {
-        eprintln!("  Branch: {}", branch);
+        style::item_colored("branch", branch, style::MAGENTA);
     }
     if let Some(ref last) = ctx.last_accessed {
-        eprintln!("  Last accessed: {}", last.format("%Y-%m-%d %H:%M"));
+        style::item("last used", &last.format("%Y-%m-%d %H:%M").to_string());
     }
+    style::blank();
 
-    // Generate shell commands to stdout (for eval by the shell wrapper)
     ctx.print_shell_commands();
 
     Ok(())
@@ -141,34 +173,41 @@ fn cmd_switch(name: &str, force: bool) -> Result<()> {
 fn cmd_list() -> Result<()> {
     let contexts = ProjectContext::list_all()?;
     if contexts.is_empty() {
-        println!("No saved contexts. Use 'pylot save <name>' to create one.");
+        style::empty_state(
+            "No saved contexts yet.",
+            "Run pylot save <name> in a project directory to get started.",
+        );
         return Ok(());
     }
 
     let service_mgr = ServiceManager::new();
 
-    println!("{:<16} {:<40} {:<12} {:<10} {}", "NAME", "PATH", "BRANCH", "SERVICES", "LAST ACCESSED");
-    println!("{}", "-".repeat(96));
+    style::blank();
+    style::heading("Your Contexts");
+    style::blank();
+    style::table_header();
+
     for ctx in contexts {
         let health = service_mgr.service_health(&ctx.name);
         let svc_status = if health.is_empty() {
-            "-".to_string()
+            "–".to_string()
         } else {
             let alive = health.iter().filter(|(_, _, a)| *a).count();
-            format!("{}/{}", alive, health.len())
+            format!("{}/{} up", alive, health.len())
         };
 
-        println!(
-            "{:<16} {:<40} {:<12} {:<10} {}",
-            ctx.name,
-            ctx.path.display(),
-            ctx.git_branch.as_deref().unwrap_or("-"),
-            svc_status,
-            ctx.last_accessed
-                .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
-                .unwrap_or_else(|| "-".to_string()),
+        style::table_row(
+            &ctx.name,
+            &ctx.path.display().to_string(),
+            ctx.git_branch.as_deref().unwrap_or("–"),
+            &svc_status,
+            &ctx.last_accessed
+                .map(|t| t.format("%b %d %H:%M").to_string())
+                .unwrap_or_else(|| "–".to_string()),
         );
     }
+    style::blank();
+
     Ok(())
 }
 
@@ -176,48 +215,79 @@ fn cmd_status() -> Result<()> {
     let ctx = ProjectContext::detect_current()?;
     let service_mgr = ServiceManager::new();
 
-    println!("Current context:");
-    println!("  Path:     {}", ctx.path.display());
-    println!("  Branch:   {}", ctx.git_branch.as_deref().unwrap_or("n/a"));
-    println!("  Env vars: {}", ctx.env_vars.len());
+    style::blank();
+    style::heading(&format!("Status: {}", ctx.name));
+    style::blank();
+    style::item("path", &ctx.path.display().to_string());
+    style::item_colored(
+        "branch",
+        ctx.git_branch.as_deref().unwrap_or("n/a"),
+        style::MAGENTA,
+    );
+    style::item("env vars", &format!("{}", ctx.env_vars.len()));
 
-    // Dirty state
     if ProjectContext::has_dirty_git_state(&ctx.path) {
         if let Some(summary) = ProjectContext::dirty_summary(&ctx.path) {
-            println!("  Git:      dirty ({})", summary);
+            style::item_colored("git", &format!("dirty ({})", summary), style::YELLOW);
         }
     } else {
-        println!("  Git:      clean");
+        style::item_colored("git", "clean", style::GREEN);
     }
 
-    // Service health
     let health = service_mgr.service_health(&ctx.name);
     if !health.is_empty() {
-        println!("  Services:");
+        style::section("Services");
         for (name, pid, alive) in &health {
-            let status = if *alive { "running" } else { "stopped" };
-            println!("    {} (PID {}) — {}", name, pid, status);
+            if *alive {
+                eprintln!(
+                    "  {} {}  {}{}{} {}PID {}{}",
+                    style::CHECK, name,
+                    style::GREEN, "running", style::RESET,
+                    style::DIM, pid, style::RESET,
+                );
+            } else {
+                eprintln!(
+                    "  {} {}  {}{}{} {}PID {}{}",
+                    style::CROSS, name,
+                    style::RED, "stopped", style::RESET,
+                    style::DIM, pid, style::RESET,
+                );
+            }
         }
     }
 
-    // Active ports
     let active_ports = service_mgr.get_listening_ports();
     if !active_ports.is_empty() {
-        println!("  Active ports:");
+        style::section("Active Ports");
         for (port, proc_name) in &active_ports {
-            println!("    :{} ({})", port, proc_name);
+            eprintln!(
+                "  {}  {}:{}{} {}{}{}",
+                style::DOT,
+                style::WHITE, port, style::RESET,
+                style::DIM, proc_name, style::RESET,
+            );
         }
     }
+
+    style::blank();
     Ok(())
 }
 
 fn cmd_remove(name: &str) -> Result<()> {
-    // Stop any running services first
+    style::blank();
+    if !style::confirm(&format!("Remove context '{}'?", name)) {
+        style::hint("Cancelled.");
+        style::blank();
+        return Ok(());
+    }
+
     let service_mgr = ServiceManager::new();
     service_mgr.stop_services(name)?;
-
     ProjectContext::remove(name)?;
-    println!("Context '{}' removed.", name);
+
+    style::success(&format!("Context '{}' removed", name));
+    style::blank();
+
     Ok(())
 }
 
@@ -225,16 +295,30 @@ fn cmd_init() -> Result<()> {
     let cwd = std::env::current_dir()?;
     let config_path = cwd.join(".pylot.toml");
 
+    style::blank();
+
     if config_path.exists() {
-        println!(".pylot.toml already exists in this directory.");
+        style::warn(".pylot.toml already exists in this directory.");
+        style::blank();
         return Ok(());
     }
 
     let template = ProjectContext::generate_config_template(&cwd)?;
     std::fs::write(&config_path, &template)?;
-    println!("Created .pylot.toml");
-    println!("Edit it to define your services and required ports, then run:");
-    println!("  pylot save <name>");
+
+    style::success("Created .pylot.toml");
+    style::blank();
+    style::hint("Edit it to define your services and required ports, then:");
+    style::blank();
+    let dir_name = cwd.file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "myproject".to_string());
+    eprintln!(
+        "    {}$ pylot save {}{}",
+        style::DIM, dir_name, style::RESET,
+    );
+    style::blank();
+
     Ok(())
 }
 
@@ -252,14 +336,18 @@ fn cmd_stop(name: Option<&str>) -> Result<()> {
     let service_mgr = ServiceManager::new();
     let health = service_mgr.service_health(&context_name);
 
+    style::blank();
+
     if health.is_empty() {
-        println!("No services running for '{}'.", context_name);
+        style::hint(&format!("No services running for '{}'.", context_name));
+        style::blank();
         return Ok(());
     }
 
-    println!("Stopping services for '{}'...", context_name);
     service_mgr.stop_services(&context_name)?;
-    println!("Done.");
+    style::success(&format!("All services stopped for '{}'", context_name));
+    style::blank();
+
     Ok(())
 }
 
@@ -278,12 +366,10 @@ pylot() {{
             return $exit_code
         fi
 
-        # Print everything before __DEVCTX_COMMANDS__ as info
-        echo "$output" | sed -n '/^__DEVCTX_COMMANDS__$/q;p' >&2
+        echo "$output" | sed -n '/^__PYLOT_COMMANDS__$/q;p' >&2
 
-        # Eval everything after __DEVCTX_COMMANDS__
         local commands
-        commands=$(echo "$output" | sed -n '/^__DEVCTX_COMMANDS__$/,$ {{ /^__DEVCTX_COMMANDS__$/d; p; }}')
+        commands=$(echo "$output" | sed -n '/^__PYLOT_COMMANDS__$/,$ {{ /^__PYLOT_COMMANDS__$/d; p; }}')
         if [ -n "$commands" ]; then
             eval "$commands"
         fi
@@ -304,10 +390,9 @@ function pylot
             return $exit_code
         end
 
-        # Eval shell commands after the marker
         set -l found 0
         for line in $output
-            if test "$line" = "__DEVCTX_COMMANDS__"
+            if test "$line" = "__PYLOT_COMMANDS__"
                 set found 1
                 continue
             end
@@ -323,7 +408,7 @@ function pylot
 end"#);
         }
         _ => {
-            println!("Unsupported shell: {}. Supported: bash, zsh, fish", shell);
+            style::error(&format!("Unsupported shell: {}. Supported: bash, zsh, fish", shell));
         }
     }
     Ok(())

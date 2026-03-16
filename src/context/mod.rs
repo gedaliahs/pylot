@@ -178,7 +178,7 @@ impl ProjectContext {
     /// Print shell commands that the parent shell should execute
     pub fn print_shell_commands(&self) {
         // These get eval'd by the shell wrapper function
-        println!("__DEVCTX_COMMANDS__");
+        println!("__PYLOT_COMMANDS__");
         println!("cd \"{}\"", self.path.display());
 
         if let Some(ref branch) = self.git_branch {

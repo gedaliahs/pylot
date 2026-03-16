@@ -1,6 +1,7 @@
 mod cli;
 mod context;
 mod services;
+pub mod style;
 mod tui;
 
 use anyhow::Result;
