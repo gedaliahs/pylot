@@ -1,0 +1,15 @@
+#!/usr/bin/env node
+const { execFileSync } = require("child_process");
+const path = require("path");
+
+const binary = path.join(__dirname, "pylot");
+
+try {
+  execFileSync(binary, process.argv.slice(2), { stdio: "inherit" });
+} catch (err) {
+  if (err.status !== undefined) {
+    process.exit(err.status);
+  }
+  console.error("Failed to run pylot. Try reinstalling: npm install -g pylot-cli");
+  process.exit(1);
+}
